@@ -1,0 +1,837 @@
+# Wine Analysis Project
+
+############################## Libraries #######################################
+library(caret)
+library(psych)
+library(dplyr)
+library(ggplot2)
+library(corrplot)
+library(cluster)
+library(gridExtra)
+library(randomForest)
+library(rattle)
+library(rpart)
+library(rpart.plot)
+library(tree)
+library(klaR)
+library(pROC)
+library(ISLR)
+
+############################# Code ##############################################
+rm(list=ls())
+
+wine <- as.data.frame(read.csv("winequalityN.csv")) # read in as dataframe
+
+head(wine,6) # see first 6 rows
+summary(wine) # descriptive stats
+
+# need to look for missing values
+sum(is.na(wine))  # 38 observations with missing data
+wine <- na.omit(wine) # remove 38 observations with missing data and redefine
+sum(is.na(wine))  # 0 observations with missing data
+
+head(wine,6) # see first 6 rows
+summary(wine) # descriptive stats
+
+# need to rate wine as "good" or "bad" and add column for it
+rating <- NULL # set up new value measure "rating" based on if wine quality greater than 5 is considered "good"
+# sort wine quality into "good" and "bad" categories into "rating" column
+for (integer in wine$quality) { 
+  if (integer < 6) {
+    rating <- c(rating, "bad")
+  }
+  else {
+    rating <- c(rating, "good")
+  }
+}
+
+wine$rating <- rating # read "rating" results into new wine$rating column
+wine$rating <- as.factor(wine$rating) # convert vector to factor
+
+head(wine,6) # see first 6 rows
+summary(wine) # descriptive stats of all wine
+
+# need to split the dataset into 2 categories for wine types: white wine and red wine
+winesplit <- split(wine, wine$type) # split wine into white and red
+winesplit # view winesplit
+
+white <- winesplit$white[2:14] # define white wine to exclude "type" column
+red <- winesplit$red[2:14] # define red wine to exclude "type" column
+
+
+
+
+###############################################################################
+######################### White Wine Analysis #################################
+head(white,6)
+str(white)
+summary(white) # descriptive stats of white wine
+multi.hist(white[-13], global=FALSE) # histogram of variables, minus "rating"
+table(white$rating) # bad = 742 ; good = 851
+
+# Correlation Matrix
+white.cor <- cor(white[-13]) # exclude rating bc it's not numeric
+white.cor # white correlation summary
+# white Correlation Plot
+corrplot(white.cor, order="hclust",main="White Wine Correlation")
+# Density and Alcohol are negatively correlated - almost -1 correlation (inversely related)
+# might need to leave it out because pH and fixed.acidity measure similar wine attributes
+
+
+
+##### Linear Regression - Quality #####
+set.seed(649)
+# trying different models to see which model to use based on low AIC and high Rsquaed
+# white.lm1 -> use all variables
+white.lm1<- lm (quality ~ ., data=white)
+summary(white.lm1)
+AIC(white.lm1) # 7219.443
+summary(white.lm1)$r.squared # 0.6731432
+# most significant: fixed.acidity, volatile.acidity, free.sulfur.dioxide, 
+# residual.sugar , density, pH, sulphates, alcohol
+
+# use only significant variables
+white.allsig <- dplyr::select(white, c('fixed.acidity', 'volatile.acidity', 'free.sulfur.dioxide', 
+                                       'residual.sugar', 'density','pH','sulphates', 'alcohol', 'quality'))
+white.lm2 <- lm(quality ~ ., data=white.allsig)
+summary(white.lm2)
+AIC(white.lm2) # 11037.26
+summary(white.lm2)$r.squared # 0.2829748
+
+# use only most significant variables
+white.mostsig <- dplyr::select(white, c('volatile.acidity', 'residual.sugar', 
+                                        'density', 'pH', "sulphates", 'quality'))
+white.lm3 <- lm(quality ~ ., data=white.mostsig)
+summary(white.lm3)
+AIC(white.lm3) # 11221.51
+summary(white.lm3)$r.squared # 0.2544088
+
+# Pick model with lowest AIC
+white.aic <- c(AIC(white.lm1), AIC(white.lm2), AIC(white.lm3))
+white.model <- list(white.lm1, white.lm2, white.lm3)
+white.model[which.min(white.aic)] # choose white.lm1 with all variables
+
+# Pick model with higher Rsquared
+white.rsquared <- c(summary(white.lm1)$r.squared, summary(white.lm2)$r.squared, summary(white.lm3)$r.squared)
+white.model <- list(white.lm1, white.lm2, white.lm3)
+white.model[which.max(white.rsquared)] # choose white.lm1 with all variables
+## Fit models based on white.lm1.  Use all variables, not just more significant ones
+
+
+
+##### K-Means Clustering - Quality #####
+# Find k
+wss <- numeric(15) # Empty vector to add
+for(k in 1:15) {clust.temp <- kmeans(white[c(-12,-13)], centers=k, nstart=25) # Remove quality and rating
+wss[k] <- sum(clust.temp$withinss)} # The smaller wss the better
+
+par(mfrow=c(1,1))
+plot(1:15, wss, type="b", xlab="Number of Clusters",
+     ylab="Within Sum of Squares") # Elbow break at 3 clusters
+
+# Use 3 as Cluister value
+set.seed(649)
+white.km <- kmeans(white[c(-12,-13)], centers=, nstart=25)
+
+# Create dataframe
+white.df <- as.data.frame(white[c(-12,-13)]) # Remove quality and rating
+white.df$cluster <- factor(white.km$cluster)
+white.centers <- as.data.frame(white.km$centers)
+
+# Identify imporant variables
+varImp(white.lm1) # residual.sugar, density, pH are Top 3
+
+# Plot Top 3 important variables against each other to see cluster predictions
+# residual.sugar v density
+white.g1 <- ggplot(data=white.df, aes(x=residual.sugar, y=density, color=cluster)) + 
+  geom_point() + theme(legend.position="right") +
+  geom_point(data=white.centers, aes(x=residual.sugar, y=density, color=as.factor(c(1,2,3))),
+             size=10, alpha=.3, show.legend=FALSE)
+
+# residual.sugar v pH
+white.g2 <- ggplot(data=white.df, aes(x=residual.sugar, y=pH, color=cluster)) + 
+  geom_point() + geom_point(data=white.centers, aes(x=residual.sugar, y=pH,
+                                                    color=as.factor(c(1,2,3))), size=10, alpha=.3, show.legend=FALSE)
+
+# density v pH
+white.g3 <- ggplot(data=white.df, aes(x=density, y=pH, color=cluster)) + 
+  geom_point() + geom_point(data=white.centers, aes(x=density, y=pH,
+                                                    color=as.factor(c(1,2,3))), size=10, alpha=.3, show.legend=FALSE)
+
+# Wine Quality: Top 3 Important Variable Clusters
+grid.arrange(arrangeGrob(white.g1 + theme(legend.position="none"),
+                         white.g2 + theme(legend.position="none"),
+                         white.g3 + theme(legend.position="none"),
+                         top ="White Quality: Top 3 Important Variable Clusters", ncol=1))
+
+## K-Means Cluster Results: Non-conclusive/no clear trends among ALL variables.  
+#  Chemical property variables are not a good indicator of wine quality
+
+
+
+### Set test & train data 80:20 asnd create index ###
+set.seed(649)
+white.train.index <- sample(nrow(white), nrow(white)*0.8) 
+
+# Set Dependent Variable as "quality"
+set.seed(649)
+white.train.qual <- white[-13][white.train.index,] # Quality Training set
+white.test.qual <- white[-13][-white.train.index,] # Quality Test set
+
+# Set Dependent Variable as "rating".
+set.seed(649)
+white.train.rate <- white[-12][white.train.index,] # Rating Training set
+white.test.rate <- white[-12][-white.train.index,] # Rating Test set
+
+
+
+##### Linear Regression 5-fold Cross Validation - Quality #####
+# White.Train.Qual
+set.seed(649)
+white.ctrl <- trainControl(method="cv", number=5)
+white.lm <- train(quality ~ ., data=white.train.qual, preProcess=c("corr", "scale", "center"), 
+                  method = "lm", trControl=white.ctrl)
+# Review cross-validation performance
+white.lm
+varImp(white.lm) # volatile.acidity, residual.sugar, alcohol, density, pH
+summary(white.lm)
+
+# Plot White.Train.qual
+par(mfrow=c(1,2)) 
+plot(white.train.qual$quality ~ predict(white.lm), xlab="Prediction", ylab="Actual", 
+     main="Actual Values vs. Prediction Values")
+plot(resid(white.lm) ~ predict(white.lm), xlab="Predicted Values", ylab="Predicted Residuals", 
+     main="Predicted Residuals vs. Predicted Values")
+
+# Resample White.Test.qual prediciton
+set.seed(649)
+white.test.pred <- predict(white.lm, white.test.qual[-12,-13]) # remove quality for dependance.  remove rating bc its not being measured
+white.test.pred.results <- postResample(white.test.pred, white.test.qual$quality)
+white.test.pred.results
+
+## Linear Regression Results:  RMSE     Rsquared     MAE 
+#                           0.9935144     NA      0.7887659  
+# Why is Rsqquared NA? likely too low to note?  If anything, just comment on very high RMSE 
+
+
+
+##### Decision Tree - Quality #####
+white.qual.dtree <- rpart(quality ~ ., method="class", data=white[-13])
+par(mfrow=c(1,1))
+rpart.plot(white.qual.dtree, main="White Decision Tree - Quality")
+
+#tree is too bushy and has too much variance (overfit)
+printcp(white.qual.dtree) #display crossvalidated error for each tree size
+plotcp(white.qual.dtree) #plot cv error
+#select CP with lowest crossvalidated error 
+#we can grab this from the plotcp table automatically with 
+white.qual.opt.cp <- white.qual.dtree$cptable[which.min(white.qual.dtree$cptable[,"xerror"]),"CP"]
+
+#lets prune the tree
+white.qual.dtree.pruned <- prune(white.qual.dtree, cp=white.qual.opt.cp)
+
+#lets review the final tree and use this model. no pruning was necessary
+rpart.plot(white.qual.dtree.pruned, main="White Pruned Decision Tree - Quality") 
+# no pruning was necessary
+
+
+
+##### Random Forest - Quality #####
+# ntree = 10
+set.seed(649)
+white.qual.rf1 <- train(quality ~ ., data = white.train.qual, method = 'rf',
+                        trControl = white.ctrl, ntree = 10)
+white.qual.rf1 # mtry2 RMSE = 0.6515801  , Rsquared = 0.4622537    looking for smallest RMSE and highest Rsquared
+white.qual.rf1.RMSE <- 0.6515801  
+white.qual.rf1.Rsq <- 0.4622537
+
+# ntree = 50
+set.seed(649)
+white.qual.rf2 <- train(quality ~ ., data=white.train.qual, method = "rf",
+                        trControl = white.ctrl, ntree=50)
+white.qual.rf2 # mtry2 RMSE = 0.6279727, Rsquared = 0.5072413  looking for smallest RMSE and highest Rsquared
+white.qual.rf2.RMSE <- 0.6279727
+white.qual.rf2.Rsq <- 0.5072413
+
+# ntree = 100
+set.seed(649)
+white.qual.rf3 <- train(quality ~ ., data=white.train.qual, method = "rf",
+                        trControl = white.ctrl, ntree=100)
+white.qual.rf3 # mtry2 RMSE = 0.6262625, Rsquared = 0.5118139  looking for smallest RMSE and highest Rsquared
+white.qual.rf3.RMSE <- 0.6262625    
+white.qual.rf3.Rsq <- 0.5118139
+
+# ntree = 500
+set.seed(649)
+white.qual.rf4 <- train(quality ~ ., data=white.train.qual, method = "rf",
+                        trControl = white.ctrl, ntree=500)
+white.qual.rf4 # mtry11 RMSE = 0.6227422, Rsquared = 0.5187288  looking for smallest RMSE and highest Rsquared
+white.qual.rf4.RMSE <- 0.6227422
+white.qual.rf4.Rsq <- 0.5187288
+
+# Which RF model has smallest RMSE?
+white.ntreeRMSE <- cbind(c(10, 50, 100, 500), c(white.qual.rf1.RMSE, white.qual.rf2.RMSE, white.qual.rf3.RMSE, white.qual.rf4.RMSE))
+white.ntreeRMSE[which.min(white.ntreeRMSE[,2])] # smallest RMSE --> ntree = 500 
+
+# Which RF model has highest Rsquared?
+white.ntreeRsq <- cbind(c(10, 50, 100, 500), c(white.qual.rf1.Rsq, white.qual.rf2.Rsq, white.qual.rf3.Rsq, white.qual.rf4.Rsq))
+white.ntreeRsq[which.max(white.ntreeRsq[,2])] # highest Rsq --> ntree = 500 
+
+plot(white.qual.rf4, main="Number of Predictors for Quality RF4 RMSE (500 Trees)")
+# Predicting using 2 variables
+
+# Predict RF on test set
+set.seed(649)
+white.qual.rf.test <- predict(white.qual.rf4, white.test.qual[-12])
+white.results.rf.qual <- postResample(white.qual.rf.test, white.test.qual$quality)
+white.results.rf.qual
+## RF Quality Results:     R2        RMSE
+#                      0.5442328  0.6029777 
+
+
+
+##### Decision Tree - Rating #####
+white.rate.dtree <- rpart(rating ~ ., method="class", data=white[-12])
+summary(white.rate.dtree)
+par(mfrow=c(1,1))
+rpart.plot(white.rate.dtree, main="White Decision Tree - Rating")
+
+#tree is too bushy and has too much variance (overfit)
+printcp(white.rate.dtree) #display crossvalidated error for each tree size
+plotcp(white.rate.dtree) #plot cv error
+#select CP with lowest crossvalidated error 
+#we can grab this from the plotcp table automatically with 
+white.rate.opt.cp <- white.rate.dtree$cptable[which.min(white.rate.dtree$cptable[,"xerror"]),"CP"]
+
+#lets prune the tree
+white.rate.dtree.pruned <- prune(white.rate.dtree, cp=white.rate.opt.cp)
+
+#lets review the final tree
+rpart.plot(white.rate.dtree.pruned, main='White Pruined Decision Tree - Rating')
+# no pruning was necessary
+
+# no need to measure yhat or mean bc rating is categorical
+
+
+
+##### Random Forest - Rating #####
+set.seed(649)
+white.rate.rf1 <- train(rating ~ ., data = white.train.rate, method = 'rf',
+                        trControl = white.ctrl, ntree = 10)
+white.rate.rf1 # mtry6 Accuracy = 0.8046687, Kappa = 0.5530093  looking for largest Accuracy and highest Kappa
+white.rate.rf1.Acc <- 0.8046687  
+white.rate.rf1.Kap <- 0.5530093
+
+# ntree = 50
+set.seed(649)
+white.rate.rf2 <- train(rating ~ ., data=white.train.rate, method = "rf",
+                        trControl = white.ctrl, ntree=50)
+white.rate.rf2 # mtry2 Accuracy = 0.8234048  , Kappa = 0.5902354  looking for largest Accuracy and highest Kappa
+white.rate.rf2.Acc <- 0.8234048    
+white.rate.rf2.Kap <- 0.5902354
+
+# ntree = 100
+set.seed(649)
+white.rate.rf3 <- train(rating ~ ., data=white.train.rate, method = "rf",
+                        trControl = white.ctrl, ntree=100)
+white.rate.rf3 # mtry6 Accuracy = 0.8249475, Kappa = 0.5892202  looking for largest Accuracy and highest Kappa
+white.rate.rf3.Acc <- 0.8249475    
+white.rate.rf3.Kap <- 0.5892202
+
+# ntree = 500
+set.seed(649)
+white.rate.rf4 <- train(rating ~ ., data=white.train.rate, method = "rf",
+                        trControl = white.ctrl, ntree=500)
+white.rate.rf4 # mtry2 Accuracy = 0.8280284  , Kappa = 0.5962578  looking for largest Accuracy and highest Kappa
+white.rate.rf4.Acc <- 0.8280284  
+white.rate.rf4.Kap <- 0.5962578
+
+# Which RF model has highest  Accuracy?
+ntreeAcc <- cbind(c(10, 50, 100, 500), c(white.rate.rf1.Acc, white.rate.rf2.Acc, white.rate.rf3.Acc, white.rate.rf4.Acc))
+ntreeAcc[which.max(ntreeAcc[,2])] # largest Accuracy --> ntree = 500 
+
+# Which RF model has highest Kappa?
+ntreeKap <- cbind(c(10, 50, 100, 500), c(white.rate.rf1.Kap, white.rate.rf2.Kap, white.rate.rf3.Kap, white.rate.rf4.Kap))
+ntreeKap[which.max(ntreeKap[,2])] # highest Kappa --> ntree = 500 
+
+plot(white.rate.rf4, main="Number of Predictors for Rate RF4 Accuracy (500 Trees)")
+# Predicting using 2 variables.  better than quality fit because of high accuracy
+
+# Predict RF on test set
+set.seed(649)
+white.rate.rf.test <- predict(white.rate.rf4, white.test.rate[-13])
+white.results.rf.rate <- postResample(white.rate.rf.test, white.test.rate$rating)
+white.results.rf.rate
+white.rate.rf.test.df <- data.frame(white.rate.rf.test)
+table(white.rate.rf.test.df$white.rate.rf.test) # bad = 285; good = 689    
+
+## RF rating Results:    Kappa     Accuracy   bad   good 
+#                     0.6327531    .8398357   285   689
+# Review: Accuracy: Percentage of correctly classifies instances out of all instances.
+#           Kappa: Accuracy normalized at the baseline of random chance on your dataset.
+
+
+
+##### Naive Bayes - Rating #####
+set.seed(649)
+white.nb <- train(rating ~., data=white.train.rate, preProcess=c("corr", "scale", "center"),
+                  method="nb", trControl=white.ctrl)
+white.nb
+#   usekernel  Accuracy     Kappa    
+#     FALSE   0.7068813   0.3385851
+#     TRUE    0.7248474   0.3998827
+
+# Predict results
+white.nb.test <- predict(white.nb, white.test.rate[-12])
+# Measure test performance
+white.results.nb <- postResample(white.nb.test, white.test.rate$rating)
+white.results.nb
+# Naive-Bayes Results:  Accuracy     Kappa 
+#                      0.7094456   0.3767112  
+
+
+
+##### Model plots for Quality #####
+white.trainmodels.qual <- list("Linear Regression"=white.lm, "Random Forest"=white.qual.rf4)
+# Training data for resampling
+white.qual.data <- resamples(white.trainmodels.qual)
+# Training - Plot performances
+bwplot(white.qual.data, metric="RMSE",main="White Quality Training Model Performances using RMSE")
+bwplot(white.qual.data, metric="Rsquared", main="White Quality Training Model Performances - R-squared")
+## Findings: Random Forest had highest Rsquared and lowest RMSE.
+#             Best to use Random Forest Model for training
+
+# Test data for resampling
+white.testmodels.qual <- c("Linear Regression", "Random Forest")
+# Testing DF
+white.qual.test <- data.frame(white.test.pred.results, white.results.rf.qual) # include Linedar Regression & Random Forest  models
+white.qual.test <- t(white.qual.test)
+white.qual.test <- data.frame(cbind(white.qual.test, Model=white.testmodels.qual))
+
+# Plot RMSE chrat
+ggplot(data=white.qual.test, aes(x=Model, y=RMSE)) +
+  geom_bar(stat="identity", color="black", fill="red") +
+  labs(title="White Quality Testing Model Performances using RMSE")
+
+# Plot Rsquared chart
+ggplot(data=white.qual.test, aes(x=Model, y=Rsquared)) +
+  geom_bar(stat="identity", color="black", fill="red") +
+  labs(title="White Quality Testing Model Performances using R-squared")
+
+## Findings: Random Forest had highest Rsquared and lowest RMSE.
+#             Best to use Random Forest Model
+
+
+
+##### Model Plots for Rating #####
+# Training data for resampling
+white.trainmodels.rate <- list("Random Forest"=white.rate.rf4, "Naive Bayes"=white.nb)
+white.rate.data <- resamples(white.trainmodels.rate)
+# Training - Plot performances
+white.rate <- bwplot(white.rate.data, metric="Accuracy")
+# Accuracy grid boxplots
+grid.arrange(arrangeGrob(white.rate, top ="White Rating Training Model Performances using Accuracy"))
+
+# Testing DF
+white.testmodels.rate <- c("Random Forest","Naive Bayes")
+white.rate.test <- data.frame(white.results.rf.rate, white.results.nb)
+white.rate.test<- t(white.rate.test)
+white.rate.test <- data.frame(cbind(white.rate.test, Model=white.testmodels.rate))
+
+# Plot  accuracy chart
+ggplot(data=white.rate.test, aes(x=Model, y=Accuracy)) +
+  geom_bar(stat="identity", color="black", fill="red") +
+  labs(title="White Rating Testing Model Performances using Accuracy")
+## Findings: Random Forest had highest Accuracy and Kappa.
+#             Best to use Random Forest Model
+
+
+
+
+###############################################################################
+########################### Red Wine Analysis ################################
+head(red,6)
+str(red)
+summary(red) # descriptive stats of red wine
+multi.hist(red[-13], global=FALSE) # histogram of variables, minus "rating"
+table(red$rating) # bad = 742 ; good = 851
+
+# Correlation Matrix
+red.cor <- cor(red[-13]) # exclude rating bc it's not numeric
+red.cor # red correlation summary
+# red Correlation Plot
+corrplot(red.cor, order="hclust", main="Red Wine Correlation")
+# pH and fixed.acidity are negatively correlated - almost -1 correlation (inversely related)
+    # might need to leave it out because pH and fixed.acidity measure similar wine attributes
+
+
+
+##### Linear Regression - Quality #####
+set.seed(649)
+# trying different models to see which model to use based on low AIC and high Rsquaed
+# red.lm -> use all variables
+red.lm1<- lm (quality ~ ., data=red)
+summary(red.lm1)
+AIC(red.lm1) # 1627.504
+summary(red.lm1)$r.squared # 0.755 
+# significant: volatile.acidity, chlorides, pH, sulphates, alcohol 
+
+# use only significant variables
+red.allsig <- dplyr::select(red, c('volatile.acidity', 'chlorides', 'pH', 
+                                   'sulphates', 'alcohol', 'quality'))
+red.lm2 <- lm(quality ~ ., data=red.allsig)
+summary(red.lm2)
+AIC(red.lm2) # 3169.54
+summary(red.lm2)$r.squared # 0.349
+
+# use only most significant variables
+red.mostsig <- dplyr::select(red, c('volatile.acidity', 'chlorides', 
+                                    'sulphates', 'alcohol', 'quality'))
+red.lm3 <- lm(quality ~ ., data=red.mostsig)
+summary(red.lm3)
+red.lm3$aic <- AIC(red.lm3) # 3179.633
+summary(red.lm3)$r.squared # 0.344
+
+# Pick model with lowest AIC
+red.aic <- c(AIC(red.lm1), AIC(red.lm2), AIC(red.lm3))
+red.model <- list(red.lm1, red.lm2, red.lm3)
+red.model[which.min(red.aic)] # choose red.lm1 with all variables
+
+# Pick model with higher Rsquared
+red.rsquared <- c(summary(red.lm1)$r.squared, summary(red.lm2)$r.squared, summary(red.lm3)$r.squared)
+red.model <- list(red.lm1, red.lm2, red.lm3)
+red.model[which.max(red.rsquared)] # choose red.lm1 with all variables
+## Fit models based on red.lm1.  Use all variables, not just more significant ones
+
+
+
+##### K-Means Clustering - Quality #####
+# Find k
+wss <- numeric(15) # Empty vector to add
+for(k in 1:15) {clust.temp <- kmeans(red[c(-12,-13)], centers=k, nstart=25) # Remove quality and rating
+wss[k] <- sum(clust.temp$withinss)} # The smaller wss the better
+
+par(mfrow=c(1,1))
+plot(1:15, wss, type="b", xlab="Number of Clusters",
+     ylab="Within Sum of Squares") # Elbow break at 3 clusters
+
+# Use 3 as Cluister value
+set.seed(649)
+red.km <- kmeans(red[c(-12,-13)], centers=3, nstart=25)
+
+# Create dataframe
+red.df <- as.data.frame(red[c(-12,-13)]) # Remove quality and rating
+red.df$cluster <- factor(red.km$cluster)
+red.centers <- as.data.frame(red.km$centers)
+
+# Identify imporant variables
+varImp(red.lm1) # alcohol, volatile.acidity, sulphates are Top 3
+
+# Plot Top 3 important variables against each other to see cluster predictions
+# Alcohol v Volatile Acidity
+red.g1 <- ggplot(data=red.df, aes(x=alcohol, y=volatile.acidity, color=cluster)) + 
+              geom_point() + theme(legend.position="right") +
+              geom_point(data=red.centers, aes(x=alcohol, y=volatile.acidity, color=as.factor(c(1,2,3))),
+              size=10, alpha=.3, show.legend=FALSE)
+
+# Alcohol v Sulphates
+red.g2 <- ggplot(data=red.df, aes(x=alcohol, y=sulphates, color=cluster)) + 
+                geom_point() + geom_point(data=red.centers, aes(x=alcohol, y=sulphates,
+                color=as.factor(c(1,2,3))), size=10, alpha=.3, show.legend=FALSE)
+
+# Volatile Acidity v Sulphates
+red.g3 <- ggplot(data=red.df, aes(x=volatile.acidity, y=sulphates, color=cluster)) + 
+                geom_point() + geom_point(data=red.centers, aes(x=volatile.acidity, y=sulphates,
+                color=as.factor(c(1,2,3))), size=10, alpha=.3, show.legend=FALSE)
+
+# Wine Quality: Top 3 Important Variable Clusters
+grid.arrange(arrangeGrob(red.g1 + theme(legend.position="none"),
+                         red.g2 + theme(legend.position="none"),
+                         red.g3 + theme(legend.position="none"),
+                         top ="Red Wine Quality: Top 3 Important Variable Clusters", ncol=1))
+
+## K-Means Cluster Results: Non-conclusive/no clear trends among ALL variables.  
+#  Chemical property variables are not a good indicator of wine quality
+
+
+
+### Set test & train data 80:20 asnd create index ###
+set.seed(649)
+red.train.index <- sample(nrow(red), nrow(red)*0.8) 
+
+# Set Dependent Variable as "quality"
+set.seed(649)
+red.train.qual <- red[-13][red.train.index,] # Quality Training set
+red.test.qual <- red[-13][-red.train.index,] # Quality Test set
+
+# Set Dependent Variable as "rating".
+set.seed(649)
+red.train.rate <- red[-12][red.train.index,] # Rating Training set
+red.test.rate <- red[-12][-red.train.index,] # Rating Test set
+
+
+
+##### Linear Regression 5-fold Cross Validation - Quality #####
+# Red.Train.Qual
+set.seed(649)
+red.ctrl <- trainControl(method="cv", number=5)
+red.lm <- train(quality ~ ., data=red.train.qual, preProcess=c("corr", "scale", "center"), 
+                method = "lm", trControl=red.ctrl)
+# Review cross-validation performance
+red.lm
+varImp(red.lm) # Alchol, volitle.acidity, sulphates, total sulfur dioxide, chlorieds
+summary(red.lm)
+
+# Plot Red.Train.qual
+par(mfrow=c(1,2)) 
+plot(red.train.qual$quality ~ predict(red.lm), xlab="Prediction", ylab="Actual", 
+     main="Actual Values vs. Prediction Values")
+plot(resid(red.lm) ~ predict(red.lm), xlab="Predicted Values", ylab="Predicted Residuals", 
+     main="Predicted Residuals vs. Predicted Values")
+
+# Resample Red.Test.qual prediciton
+set.seed(649)
+red.test.pred <- predict(red.lm, red.test.qual[-12,-13]) # remove quality for dependance.  remove rating bc its not being measured
+red.test.pred.results <- postResample(red.test.pred, red.test.qual$quality)
+red.test.pred.results
+
+## Linear Regression Results:  RMSE     Rsquared     MAE 
+                          # 0.9124675     NA      0.7179540 
+# Why is Rsqquared NA? likely too low to note?  If anything, just comment on very high RMSE 
+
+
+
+##### Decision Tree - Quality #####
+red.qual.dtree <- rpart(quality ~ ., method="class", data=red[-13])
+par(mfrow=c(1,1))
+rpart.plot(red.qual.dtree, main="Red Decision Tree - Quality")
+
+#tree is too bushy and has too much variance (overfit)
+printcp(red.qual.dtree) #display crossvalidated error for each tree size
+plotcp(red.qual.dtree) #plot cv error
+#select CP with lowest crossvalidated error 
+#we can grab this from the plotcp table automatically with 
+red.qual.opt.cp <- red.qual.dtree$cptable[which.min(red.qual.dtree$cptable[,"xerror"]),"CP"]
+
+#lets prune the tree
+red.qual.dtree.pruned <- prune(red.qual.dtree, cp=red.qual.opt.cp)
+
+#lets review the final tree and use this model. no pruning was necessary
+rpart.plot(red.qual.dtree.pruned, main="Red Pruned Decision Tree - Quality") 
+# no pruning was necessary
+
+
+
+##### Random Forest - Quality #####
+# ntree = 10
+set.seed(649)
+red.qual.rf1 <- train(quality ~ ., data = red.train.qual, method = 'rf',
+            trControl = red.ctrl, ntree = 10)
+red.qual.rf1 # mtry6 RMSE = 0.6008895, Rsquared = 0.4432082.  looking for smallest RMSE and highest Rsquared
+red.qual.rf1.RMSE <- 0.6008895
+red.qual.rf1.Rsq <- 0.4432082
+
+# ntree = 50
+set.seed(649)
+red.qual.rf2 <- train(quality ~ ., data=red.train.qual, method = "rf",
+                   trControl = red.ctrl, ntree=50)
+red.qual.rf2 # mtry6 RMSE = 0.5819974, Rsquared = 0.4788916  looking for smallest RMSE and highest Rsquared
+red.qual.rf2.RMSE <- 0.5819974
+red.qual.rf2.Rsq <- 0.4788916
+
+# ntree = 100
+set.seed(649)
+red.qual.rf3 <- train(quality ~ ., data=red.train.qual, method = "rf",
+                      trControl = red.ctrl, ntree=100)
+red.qual.rf3 # mtry6 RMSE = 0.5796627, Rsquared = 0.4837983  looking for smallest RMSE and highest Rsquared
+red.qual.rf3.RMSE <- 0.5796627    
+red.qual.rf3.Rsq <- 0.4837983
+
+# ntree = 500
+set.seed(649)
+red.qual.rf4 <- train(quality ~ ., data=red.train.qual, method = "rf",
+                      trControl = red.ctrl, ntree=500)
+red.qual.rf4 # mtry11 RMSE = 0.5785910, Rsquared = 0.4865179  looking for smallest RMSE and highest Rsquared
+red.qual.rf4.RMSE <- 0.5774952
+red.qual.rf4.Rsq <- 0.4881729
+
+# Which RF model has smallest RMSE?
+red.ntreeRMSE <- cbind(c(10, 50, 100, 500), c(red.qual.rf1.RMSE, red.qual.rf2.RMSE, red.qual.rf3.RMSE, red.qual.rf4.RMSE))
+red.ntreeRMSE[which.min(red.ntreeRMSE[,2])] # smallest RMSE --> ntree = 500 
+
+# Which RF model has highest Rsquared?
+red.ntreeRsq <- cbind(c(10, 50, 100, 500), c(red.qual.rf1.Rsq, red.qual.rf2.Rsq, red.qual.rf3.Rsq, red.qual.rf4.Rsq))
+red.ntreeRsq[which.max(red.ntreeRsq[,2])] # highest Rsq --> ntree = 500 
+
+plot(red.qual.rf4, main="Number of Predictors for Quality RF4 RMSE (500 Trees)")
+# Predicting using all 11 variables.. likely over-fit?
+
+# Predict RF on test set
+set.seed(649)
+red.qual.rf.test <- predict(red.qual.rf4, red.test.qual[-12])
+red.results.rf.qual <- postResample(red.qual.rf.test, red.test.qual$quality)
+red.results.rf.qual
+## RF Quality Results:     R2        RMSE
+#                      0.4736911  0.5970505
+
+
+
+##### Decision Tree - Rating ##### 
+red.rate.dtree <- rpart(rating ~ ., method="class", data=red[-12])
+summary(red.rate.dtree)
+par(mfrow=c(1,1))
+rpart.plot(red.rate.dtree, main="Red Decision Tree - Rating")
+
+#tree is too bushy and has too much variance (overfit)
+printcp(red.rate.dtree) #display crossvalidated error for each tree size
+plotcp(red.rate.dtree) #plot cv error
+#select CP with lowest crossvalidated error 
+#we can grab this from the plotcp table automatically with 
+red.rate.opt.cp <- red.rate.dtree$cptable[which.min(red.rate.dtree$cptable[,"xerror"]),"CP"]
+
+#lets prune the tree
+red.rate.dtree.pruned <- prune(red.rate.dtree, cp=red.rate.opt.cp)
+
+#lets review the final tree
+rpart.plot(red.rate.dtree.pruned, main='Red Pruined Decision Tree - Rating')
+# no pruning was necessary
+
+# no need to measure yhat or mean bc rating is categorical
+
+
+
+##### Random Forest - Rating #####
+set.seed(649)
+red.rate.rf1 <- train(rating ~ ., data = red.train.rate, method = 'rf',
+                      trControl = red.ctrl, ntree = 10)
+red.rate.rf1 # mtry2 Accuracy = 0.7707691, Kappa = 0.5404934.  looking for largest Accuracy and highest Kappa
+red.rate.rf1.Acc <- 0.7707691  
+red.rate.rf1.Kap <- 0.5404934
+
+# ntree = 50
+set.seed(649)
+red.rate.rf2 <- train(rating ~ ., data=red.train.rate, method = "rf",
+                      trControl = red.ctrl, ntree=50)
+red.rate.rf2 # mtry2 Accuracy = 0.7943572, Kappa = 0.586730  looking for largest Accuracy and highest Kappa
+red.rate.rf2.Acc <- 0.7943572  
+red.rate.rf2.Kap <- 0.586730
+
+# ntree = 100
+set.seed(649)
+red.rate.rf3 <- train(rating ~ ., data=red.train.rate, method = "rf",
+                      trControl = red.ctrl, ntree=100)
+red.rate.rf3 # mtry6 Accuracy = 0.7927886, Kappa = 0.5840130  looking for largest Accuracy and highest Kappa
+red.rate.rf3.Acc <- 0.7927886    
+red.rate.rf3.Kap <- 0.5840130
+
+# ntree = 500
+set.seed(649)
+red.rate.rf4 <- train(rating ~ ., data=red.train.rate, method = "rf",
+                      trControl = red.ctrl, ntree=500)
+red.rate.rf4 # mtry2 Accuracy = 0.7967132, Kappa = 0.5919132  looking for largest Accuracy and highest Kappa
+red.rate.rf4.Acc <- 0.7967132
+red.rate.rf4.Kap <- 0.5919132
+
+# Which RF model has highest  Accuracy?
+red.ntreeAcc <- cbind(c(10, 50, 100, 500), c(red.rate.rf1.Acc, red.rate.rf2.Acc, red.rate.rf3.Acc, red.rate.rf4.Acc))
+red.ntreeAcc[which.max(red.ntreeAcc[,2])] # largest Accuracy --> ntree = 500 
+
+# Which RF model has highest Kappa?
+red.ntreeKap <- cbind(c(10, 50, 100, 500), c(red.rate.rf1.Kap, red.rate.rf2.Kap, red.rate.rf3.Kap, red.rate.rf4.Kap))
+red.ntreeKap[which.max(red.ntreeKap[,2])] # highest Kappa --> ntree = 500 
+
+plot(red.rate.rf4, main="Number of Predictors for Rate RF4 Accuracy (500 Trees)")
+# Predicting using 2 variables.  better than quality fit because of high accuracy
+
+# Predict RF on test set
+set.seed(649)
+red.rate.rf.test <- predict(red.rate.rf4, red.test.rate[-13])
+red.results.rf.rate <- postResample(red.rate.rf.test, red.test.rate$rating)
+red.results.rf.rate
+red.rate.rf.test.df <- data.frame(red.rate.rf.test)
+table(red.rate.rf.test.df$red.rate.rf.test) # bad = 147; good = 172 
+
+## RF rating Results:    Kappa     Accuracy   bad   good 
+#                     0.6535553   0.8275862   147   172
+# Review: Accuracy: Percentage of correctly classifies instances out of all instances.
+#           Kappa: Accuracy normalized at the baseline of random chance on your dataset.
+
+
+
+##### Naive Bayes - Rating #####
+set.seed(649)
+red.nb <- train(rating ~., data=red.train.rate, preProcess=c("corr", "scale", "center"),
+                method="nb", trControl=red.ctrl)
+red.nb
+#   usekernel   Accuracy     Kappa    
+#     FALSE    0.7276500   0.4541336
+#     TRUE     0.7386335   0.4778241
+
+# Predict results
+red.nb.test <- predict(red.nb, red.test.rate[-12])
+# Measure test performance
+red.results.nb <- postResample(red.nb.test, red.test.rate$rating)
+red.results.nb
+# Naive-Bayes Results:  Accuracy     Kappa 
+#                      0.7304075  0.4625211 
+
+
+
+##### Model plots for Quality #####
+red.trainmodels.qual <- list("Linear Regression"=red.lm, "Random Forest"=red.qual.rf4)
+# Training data for resampling
+red.qual.data <- resamples(red.trainmodels.qual)
+# Training - Plot performances
+bwplot(red.qual.data, metric="RMSE",main="Red Quality Training Model Performances using RMSE")
+bwplot(red.qual.data, metric="Rsquared", main="Red Quality Training Model Performances - R-squared")
+## Findings: Random Forest had highest Rsquared and lowest RMSE.
+#             Best to use Random Forest Model for training
+
+# Test data for resampling
+red.testmodels.qual <- c("Linear Regression", "Random Forest")
+# Testing DF
+red.qual.test <- data.frame(red.test.pred.results, red.results.rf.qual) # include Linedar Regression & Random Forest  models
+red.qual.test <- t(red.qual.test)
+red.qual.test <- data.frame(cbind(red.qual.test, Model=red.testmodels.qual))
+
+# Plot RMSE chrat
+ggplot(data=red.qual.test, aes(x=Model, y=RMSE)) +
+   geom_bar(stat="identity", color="black", fill="red") +
+   labs(title="Red Quality Testing Model Performances using RMSE")
+
+# Plot Rsquared chart
+ggplot(data=red.qual.test, aes(x=Model, y=Rsquared)) +
+  geom_bar(stat="identity", color="black", fill="red") +
+  labs(title="Red Quality Testing Model Performances using R-squared")
+
+## Findings: Random Forest had highest Rsquared and lowest RMSE.
+#             Best to use Random Forest Model
+
+
+
+##### Model Plots for Rating #####
+# Training data for resampling
+red.trainmodels.rate <- list("Random Forest"=red.rate.rf4, "Naive Bayes"=red.nb)
+red.rate.data <- resamples(red.trainmodels.rate)
+# Training - Plot performances
+red.rate <- bwplot(red.rate.data, metric="Accuracy")
+# Accuracy grid boxplots
+grid.arrange(arrangeGrob(red.rate, top ="Red Rating Training Model Performances using Accuracy"))
+
+# Testing DF
+red.testmodels.rate <- c("Random Forest","Naive Bayes")
+red.rate.test <- data.frame(red.results.rf.rate, red.results.nb)
+red.rate.test<- t(red.rate.test)
+red.rate.test <- data.frame(cbind(red.rate.test, Model=red.testmodels.rate))
+
+# Plot  accuracy chart
+ggplot(data=red.rate.test, aes(x=Model, y=Accuracy)) +
+  geom_bar(stat="identity", color="black", fill="red") +
+  labs(title="Red Rating Testing Model Performances using Accuracy")
+## Findings: Random Forest had highest Accuracy and Kappa.
+#             Best to use Random Forest Model
+
+
+
+
+
